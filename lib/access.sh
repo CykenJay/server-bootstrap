@@ -13,17 +13,18 @@ verify_key_session() {
 }
 
 prepare_access() {
-    local p
+    local p source allowed
     SSH_PORTS=()
     while read -r p; do SSH_PORTS+=("$p"); done < <(
         { sshd -T | awk '$1 == "port" {print $2}'; printf '%s\n' "$SERVER_PORT"; [[ -z $SSH_PORT ]] || printf '%s\n' "$SSH_PORT"; } | sort -nu
     )
     ((${#SSH_PORTS[@]} > 0)) || die 'Cannot discover SSH ports.'
     if ((${#SSH_SOURCES[@]})); then
-        python3 - "$CLIENT_IP" ${SSH_SOURCES[@]+"${SSH_SOURCES[@]}"} <<'PY'
-import ipaddress, sys
-assert any(ipaddress.ip_address(sys.argv[1]) in ipaddress.ip_network(s, strict=False) for s in sys.argv[2:]), 'Current SSH source must be allowed'
-PY
+        allowed=0
+        for source in "${SSH_SOURCES[@]}"; do
+            if address_in_network "$CLIENT_IP" "$source"; then allowed=1; break; fi
+        done
+        ((allowed)) || die 'Current SSH source must be allowed.'
     fi
     sshd -t
     [[ ! -L /etc/ssh/sshd_config && ! -L /etc/ssh/server-bootstrap.conf ]] || die 'Managed SSH files must not be symlinks.'
@@ -157,41 +158,13 @@ configure_access() {
     if [[ -n ${KEY_HOME:-} ]]; then
         install -d -m 700 -o "$KEY_USER" -g "$(id -gn "$KEY_USER")" "$KEY_HOME/.ssh"
         touch "$KEY_HOME/.ssh/authorized_keys"
-        python3 - "$KEY_HOME/.ssh/authorized_keys" "$RUN_DIR/validated-keys" <<'PY'
-import pathlib, shlex, sys
-p = pathlib.Path(sys.argv[1])
-existing = p.read_text()
-tokens = set()
-for line in existing.splitlines():
-    try:
-        fields = shlex.split(line)
-    except ValueError:
-        continue
-    # Preserve any existing restrictions on a matching key; do not add an unrestricted duplicate.
-    for a, b in zip(fields, fields[1:]):
-        if a.startswith(('ssh-', 'ecdsa-', 'sk-')):
-            tokens.add((a, b))
-additions = []
-for line in pathlib.Path(sys.argv[2]).read_text().splitlines():
-    key = tuple(line.split()[:2])
-    if key not in tokens:
-        additions.append(line)
-        tokens.add(key)
-if additions:
-    p.write_text(existing + ('\n' if existing and not existing.endswith('\n') else '') + '\n'.join(additions) + '\n')
-PY
+        append_public_keys "$KEY_HOME/.ssh/authorized_keys" "$RUN_DIR/validated-keys"
         chown "$KEY_USER:$(id -gn "$KEY_USER")" "$KEY_HOME/.ssh/authorized_keys"
         chmod 600 "$KEY_HOME/.ssh/authorized_keys"
     fi
     render_ssh_config /etc/ssh/server-bootstrap.conf > "$RUN_DIR/ssh-config"
     write_config /etc/ssh/server-bootstrap.conf access < "$RUN_DIR/ssh-config"
-    python3 - <<'PY'
-from pathlib import Path
-p = Path('/etc/ssh/sshd_config')
-include = 'Include /etc/ssh/server-bootstrap.conf'
-lines = [s for s in p.read_text().splitlines() if s.strip() != include]
-p.write_text(include + '\n' + '\n'.join(lines) + '\n')
-PY
+    ensure_ssh_include /etc/ssh/sshd_config
     sshd -t
     verify_ssh_policy
     # Open ports before changing the listener. Existing rules are intentionally retained.
@@ -225,6 +198,33 @@ PY
         F2B_TEMP_MASK=0
     fi
     timeout 30 systemctl enable --now fail2ban
+}
+
+append_public_keys() {
+    local target=$1 incoming=$2 fingerprints fingerprint line
+    # Let OpenSSH parse quoted options and comments. An existing restricted key
+    # must never gain an unrestricted duplicate merely because it has options.
+    fingerprints=$(ssh-keygen -l -E sha256 -f "$target" 2>/dev/null | awk '{print $2}' || true)
+    while IFS= read -r line || [[ -n $line ]]; do
+        [[ -n $line ]] || continue
+        printf '%s\n' "$line" > "$RUN_DIR/key-check"
+        fingerprint=$(ssh-keygen -l -E sha256 -f "$RUN_DIR/key-check" | awk '{print $2}')
+        [[ -n $fingerprint ]] || die 'Cannot determine public key fingerprint.'
+        if ! grep -Fxq "$fingerprint" <<< "$fingerprints"; then
+            if [[ -s $target && -n $(tail -c 1 "$target") ]]; then printf '\n' >> "$target"; fi
+            printf '%s\n' "$line" >> "$target"
+            fingerprints+=$'\n'"$fingerprint"
+        fi
+    done < "$incoming"
+}
+
+ensure_ssh_include() {
+    local target=$1 temporary="$RUN_DIR/sshd-main"
+    awk 'BEGIN { include = "Include /etc/ssh/server-bootstrap.conf"; print include }
+        { trimmed = $0; sub(/^[[:space:]]+/, "", trimmed); sub(/[[:space:]]+$/, "", trimmed)
+          if (trimmed != include) print $0 }' "$target" > "$temporary"
+    # Keep original ownership, permissions and inode (also works on bind mounts).
+    cat "$temporary" > "$target"
 }
 
 render_fail2ban_config() {

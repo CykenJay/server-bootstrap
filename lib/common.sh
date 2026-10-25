@@ -126,8 +126,97 @@ validate_options() {
 }
 
 validate_address() {
-    command -v python3 >/dev/null || die 'python3 is needed to validate IP/CIDR options.'
-    python3 -c 'import ipaddress,sys; ipaddress.ip_network(sys.argv[1], strict=False)' "$1" 2>/dev/null || die "Invalid IP/CIDR: $1"
+    address_info "$1" >/dev/null || die "Invalid IP/CIDR: $1"
+}
+
+# Emit family, prefix length, then four octets or eight 16-bit words.
+# POSIX awk avoids interpreter dependencies and non-portable bitwise extensions.
+address_info() {
+    [[ $1 =~ ^[0-9a-fA-F:./]+$ && ${#1} -le 100 ]] || return 1
+    LC_ALL=C awk -v value="$1" '
+    function ipv4(text, out,    n, i, a) {
+        n = split(text, a, ".")
+        if (n != 4) return -1
+        for (i = 1; i <= 4; i++) {
+            if (a[i] !~ /^[0-9]+$/ || length(a[i]) > 3 || a[i] + 0 > 255) return -1
+            if (length(a[i]) > 1 && substr(a[i], 1, 1) == "0") return -1
+            out[i] = a[i] + 0
+        }
+        return 4
+    }
+    function words(text, out,    n, i, j, a, digit, number) {
+        if (text == "") return 0
+        n = split(text, a, ":")
+        for (i = 1; i <= n; i++) {
+            if (a[i] !~ /^[0-9a-fA-F]+$/ || length(a[i]) > 4) return -1
+            number = 0
+            for (j = 1; j <= length(a[i]); j++) {
+                digit = index("0123456789abcdef", tolower(substr(a[i], j, 1))) - 1
+                number = number * 16 + digit
+            }
+            out[i] = number
+        }
+        return n
+    }
+    BEGIN {
+        parts = split(value, input, "/")
+        if (parts > 2) exit 1
+        ip = input[1]
+        family = index(ip, ":") ? 6 : 4
+        maximum = family == 4 ? 32 : 128
+        prefix = maximum
+        if (parts == 2) {
+            if (input[2] !~ /^[0-9]+$/ || input[2] + 0 > maximum) exit 1
+            prefix = input[2] + 0
+        }
+        if (family == 4) {
+            if (ipv4(ip, result) < 0) exit 1
+            count = 4
+        } else {
+            # IPv4-embedded IPv6, e.g. ::ffff:192.0.2.1.
+            if (index(ip, ".")) {
+                match(ip, /[^:]+$/)
+                tail = substr(ip, RSTART)
+                if (ipv4(tail, bytes) < 0) exit 1
+                ip = substr(ip, 1, RSTART - 1) sprintf("%x:%x", bytes[1] * 256 + bytes[2], bytes[3] * 256 + bytes[4])
+            }
+            compressed = index(ip, "::")
+            if (compressed) {
+                left = substr(ip, 1, compressed - 1)
+                right = substr(ip, compressed + 2)
+                nl = words(left, lwords)
+                nr = words(right, rwords)
+                if (nl < 0 || nr < 0 || nl + nr >= 8) exit 1
+                for (i = 1; i <= nl; i++) result[i] = lwords[i]
+                for (i = nl + 1; i <= 8 - nr; i++) result[i] = 0
+                for (i = 1; i <= nr; i++) result[8 - nr + i] = rwords[i]
+            } else if (words(ip, result) != 8) exit 1
+            count = 8
+        }
+        printf "%d %d", family, prefix
+        for (i = 1; i <= count; i++) printf " %d", result[i]
+        printf "\n"
+    }'
+}
+
+address_in_network() {
+    local address network
+    [[ $1 != */* ]] || return 1
+    address=$(address_info "$1") || return 1
+    network=$(address_info "$2") || return 1
+    awk -v address="$address" -v network="$network" 'BEGIN {
+        count = split(address, a, " ")
+        split(network, n, " ")
+        if (a[1] != n[1]) exit 1
+        width = a[1] == 4 ? 8 : 16
+        remaining = n[2]
+        for (i = 3; i <= count && remaining > 0; i++) {
+            used = remaining < width ? remaining : width
+            divisor = 2 ^ (width - used)
+            if (int(a[i] / divisor) != int(n[i] / divisor)) exit 1
+            remaining -= used
+        }
+    }'
 }
 
 print_plan() {

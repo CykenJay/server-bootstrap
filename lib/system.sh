@@ -64,7 +64,7 @@ install_packages() {
     apt_run upgrade -y
     apt_run install -y ca-certificates curl wget sudo vim-tiny less unzip zip tar \
         htop dnsutils iproute2 iputils-ping netcat-openbsd lsof rsync bash-completion dbus kmod procps \
-        openssh-server ufw fail2ban python3 python3-systemd unattended-upgrades \
+        openssh-server ufw fail2ban python3-systemd unattended-upgrades \
         apt-listchanges logrotate tzdata
 }
 
@@ -164,18 +164,7 @@ EOF
         hostnamectl set-hostname "$HOSTNAME_VALUE"
         # Keep sudo/local hostname resolution working without replacing other hosts entries.
         save_file /etc/hosts
-        python3 - "$HOSTNAME_VALUE" <<'PY'
-import pathlib, sys
-p = pathlib.Path('/etc/hosts')
-lines = p.read_text().splitlines()
-old = [s for s in lines if s.split()[:1] == ['127.0.1.1']]
-aliases = []
-for line in old:
-    aliases += line.split('#', 1)[0].split()[1:]
-aliases = list(dict.fromkeys([sys.argv[1], *aliases]))
-lines = [s for s in lines if s.split()[:1] != ['127.0.1.1']]
-p.write_text('\n'.join([*lines, '127.0.1.1\t' + ' '.join(aliases)]) + '\n')
-PY
+        update_hosts_hostname /etc/hosts "$HOSTNAME_VALUE"
     fi
     if [[ -n $DNS ]]; then
         write_config /etc/systemd/resolved.conf.d/60-server-bootstrap.conf <<EOF
@@ -192,6 +181,21 @@ EOF
             die 'DNS configuration did not pass validation.'
         fi
     fi
+}
+
+update_hosts_hostname() {
+    local target=$1 hostname=$2 temporary="$RUN_DIR/hosts-updated"
+    awk -v hostname="$hostname" '
+        BEGIN { aliases = hostname; seen[hostname] = 1 }
+        $1 == "127.0.1.1" {
+            sub(/#.*/, "")
+            for (i = 2; i <= NF; i++) if (!seen[$i]++) aliases = aliases " " $i
+            next
+        }
+        { print }
+        END { print "127.0.1.1\t" aliases }
+    ' "$target" > "$temporary"
+    cat "$temporary" > "$target"
 }
 
 configure_swap() {

@@ -2,7 +2,7 @@
 
 一个可构建为单文件的中文交互式初始化脚本。服务器上直接运行脚本，按菜单选择即可；执行前会展示完整清单，只有明确输入 `y` 才开始修改系统。
 
-适用于通过 SSH 管理、运行 systemd 的 Debian 13。需要 root 权限、Python 3，以及包含 `trixie-security` 的 APT 软件源。保留云厂商恢复控制台；脚本不会自动重启。
+适用于通过 SSH 管理、运行 systemd 的 Debian 13。需要 root 权限，以及包含 `trixie-security` 的 APT 软件源。服务器无需预装 Python；脚本自身使用 Bash、awk 和系统基础命令。保留云厂商恢复控制台；脚本不会自动重启。
 
 ## 构建和上传
 
@@ -30,7 +30,7 @@ bash /root/bootstrap.sh
 sudo --preserve-env=SSH_CONNECTION,SSH_USER_AUTH bash /path/to/bootstrap.sh
 ```
 
-精简镜像如果没有 Python 3，需先安装：`apt-get update && apt-get install -y python3`。
+构建和开发测试使用 Python 3，仅在开发机上需要。UFW、Fail2ban、自动更新工具自身的 Python 依赖由 APT 随软件包安装，不需要用户预先配置。
 
 ## 跟随向导配置
 
@@ -61,7 +61,7 @@ Debian 13 服务器初始化向导
 | 高级设置 | 先询问是否展开，选择后才显示详细选项 | 跳过全部高级设置 |
 | 最终确认 | 显示全部选择，再询问是否开始 | 取消，不执行 |
 
-自定义业务规则会分别询问端口号、TCP/UDP 和来源，不需要记忆参数格式。无效的编号、端口和 IP 会要求重新输入。
+自定义业务规则会分别询问端口号、TCP/UDP 和来源，不需要记忆参数格式。无效的编号、端口和 IP 会要求重新输入。网段使用数字前缀的 CIDR 写法，例如 `192.0.2.0/24`、`2001:db8::/32`；不接受接口作用域标识或点分掩码。
 
 向导收集配置期间不修改系统。选择预览、最终确认时回车、输入结束或在执行前按 Ctrl+C，都不会开始初始化。没有终端时不会自动执行；无人值守调用必须显式指定命令。
 
@@ -165,3 +165,12 @@ docker run --rm \
 ```
 
 容器检查验证 ShellCheck、OpenSSH/Fail2ban 配置、UFW dry-run、APT 配置和 systemd 单元。公网重连、断线和重启回滚仍需在有恢复控制台的测试虚拟机上验证。
+
+在未安装 Python 的干净容器中校验单文件地址检查、配置编辑和公钥合并：
+
+```bash
+bash build.sh
+docker run --rm \
+  --mount "type=bind,source=$PWD,target=/source,readonly" \
+  debian:trixie-slim bash /source/tests/no-python.sh
+```
