@@ -4,6 +4,16 @@
 
 适用于通过 SSH 管理、运行 systemd 的 Debian 13。需要 root 权限，以及包含 `trixie-security` 的 APT 软件源。服务器无需预装 Python；脚本自身使用 Bash、awk 和系统基础命令。保留云厂商恢复控制台；脚本不会自动重启。
 
+## 一行启动
+
+通过 SSH 以 root 登录服务器后执行（需要 `curl`）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/CykenJay/server-bootstrap/master/dist/bootstrap.sh -o /root/bootstrap.sh && bash /root/bootstrap.sh
+```
+
+命令下载 `master` 分支的单文件脚本，下载成功后启动交互向导。按提示选择即可，最终确认前不会修改系统配置。以后可直接运行 `bash /root/bootstrap.sh`。
+
 ## 构建和上传
 
 开发机在项目目录执行：
