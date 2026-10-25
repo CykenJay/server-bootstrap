@@ -45,15 +45,53 @@ docker_preflight
     def test_unsupported_architecture(self):
         self.run_shell('dpkg() { echo riscv64; }; docker_preflight', ok=False)
 
-    def test_duplicate_repo_is_rejected_but_comments_are_not(self):
+    def test_existing_list_is_reused_but_comments_are_not(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / 'sources.list.d').mkdir()
             repo = root / 'sources.list.d/old-docker.list'
             repo.write_text('# deb https://download.docker.com/linux/debian trixie stable\n')
-            self.run_shell('check_docker_sources "$WORK"', env={'WORK': tmp})
-            repo.write_text('deb https://download.docker.com/linux/debian trixie stable\n')
-            self.run_shell('check_docker_sources "$WORK"', ok=False, env={'WORK': tmp})
+            self.run_shell('check_docker_sources "$WORK"; [[ $DOCKER_REUSE_SOURCE == 0 ]]', env={'WORK': tmp})
+            repo.write_text('deb [arch=arm64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian trixie stable\n')
+            self.run_shell('check_docker_sources "$WORK"; [[ $DOCKER_REUSE_SOURCE == 1 ]]', env={'WORK': tmp})
+
+    def test_deb822_enabled_and_disabled_sources(self):
+        cases = [
+            ('Types: deb\nURIs: https://download.docker.com/linux/debian\nSuites: trixie\n', 1),
+            ('Types: deb\nURIs:\n https://download.docker.com/linux/debian/\nSuites: trixie\n', 1),
+            ('Enabled: no\nTypes: deb\nURIs: https://download.docker.com/linux/debian\n', 0),
+            ('Types: deb-src\nURIs: https://download.docker.com/linux/debian\n', 0),
+            ('# Types: deb\n# URIs: https://download.docker.com/linux/debian\n', 0),
+            ('Types: deb\nURIs: https://example.org/linux/debian\n', 0),
+            ('Enabled: no\nTypes: deb\nURIs: https://download.docker.com/linux/debian\n\nTypes: deb\nURIs: https://download.docker.com/linux/debian\n', 1),
+        ]
+        for content, expected in cases:
+            with self.subTest(content=content), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / 'sources.list.d').mkdir()
+                (root / 'sources.list.d/docker.sources').write_text(content)
+                self.run_shell(f'check_docker_sources "$WORK"; [[ $DOCKER_REUSE_SOURCE == {expected} ]]', env={'WORK': tmp})
+
+    def test_reusing_repository_preserves_files_and_apt_failure_stops_install(self):
+        for update_fails in ['0', '1']:
+            with self.subTest(update_fails=update_fails), tempfile.TemporaryDirectory() as tmp:
+                self.run_shell('''RUN_DIR="$WORK"
+DOCKER_REUSE_SOURCE=1
+package_installed() { return 0; }
+curl() { echo 'unexpected key download' >&2; exit 99; }
+write_config() { echo 'unexpected config write' >&2; exit 99; }
+apt_run() {
+    printf '%s\\n' "$*" >> "$WORK/events"
+    if [[ $1 == update && $UPDATE_FAILS == 1 ]]; then return 100; fi
+}
+install_docker_packages
+''', ok=update_fails == '0', env={'WORK': tmp, 'UPDATE_FAILS': update_fails})
+                events = (Path(tmp) / 'events').read_text()
+                self.assertIn('update --error-on=any', events)
+                if update_fails == '1':
+                    self.assertNotIn('install', events)
+                else:
+                    self.assertIn('install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin', events)
 
     def test_official_source_uses_explicit_key_and_target_release(self):
         output = self.run_shell('dpkg() { echo arm64; }; render_docker_source').stdout

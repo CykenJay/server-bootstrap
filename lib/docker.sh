@@ -6,12 +6,51 @@ package_installed() {
     [[ $status == 'install ok installed' ]]
 }
 
+docker_source_enabled() {
+    local file=$1 deb822=0
+    [[ $file != *.sources ]] || deb822=1
+    awk -v deb822="$deb822" '
+        BEGIN { RS = deb822 ? "" : "\n" }
+        {
+            if (!deb822) {
+                line = $0
+                sub(/#.*/, "", line)
+                if (line ~ /^[[:space:]]*deb[[:space:]]/ &&
+                    line ~ /[[:space:]]https?:\/\/download[.]docker[.]com\/linux\/debian\/?([[:space:]]|$)/) found = 1
+                next
+            }
+            enabled = types = uris = field = ""
+            count = split($0, lines, "\n")
+            for (i = 1; i <= count; i++) {
+                line = lines[i]
+                if (line ~ /^[[:space:]]*#/) continue
+                if (line ~ /^[[:space:]]+/) value = line
+                else {
+                    colon = index(line, ":")
+                    if (!colon) { field = ""; continue }
+                    field = tolower(substr(line, 1, colon - 1))
+                    value = substr(line, colon + 1)
+                }
+                if (field == "enabled") enabled = enabled " " tolower(value)
+                if (field == "types") types = types " " value
+                if (field == "uris") uris = uris " " value
+            }
+            if (enabled !~ /(^|[[:space:]])no([[:space:]]|$)/ &&
+                types ~ /(^|[[:space:]])deb([[:space:]]|$)/ &&
+                uris ~ /(^|[[:space:]])https?:\/\/download[.]docker[.]com\/linux\/debian\/?([[:space:]]|$)/) found = 1
+        }
+        END { exit !found }
+    ' "$file"
+}
+
 check_docker_sources() {
-    local directory=${1:-/etc/apt} file
+    local directory=$1 file
+    DOCKER_REUSE_SOURCE=0
     for file in "$directory/sources.list" "$directory"/sources.list.d/*.list "$directory"/sources.list.d/*.sources; do
-        [[ -f $file && $file != "$directory/sources.list.d/docker.sources" ]] || continue
-        if grep -Eq '^[[:space:]]*[^#[:space:]].*download\.docker\.com/linux/debian' "$file"; then
-            die "Docker repository already exists in $file; consolidate it into sources.list.d/docker.sources before installation."
+        [[ -f $file ]] || continue
+        if docker_source_enabled "$file"; then
+            DOCKER_REUSE_SOURCE=1
+            log "Reusing existing Docker repository: $file (APT will validate repository metadata and signatures)."
         fi
     done
 }
@@ -35,8 +74,10 @@ docker_preflight() {
         [[ $state != masked* ]] || die "$unit is masked; resolve this before selecting Docker installation."
     done
     check_docker_sources /etc/apt
-    [[ ! -L /etc/apt/keyrings/docker.asc && ! -L /etc/apt/sources.list.d/docker.sources ]] ||
-        die 'Docker repository files must not be symlinks.'
+    if ((DOCKER_REUSE_SOURCE == 0)); then
+        [[ ! -L /etc/apt/keyrings/docker.asc && ! -L /etc/apt/sources.list.d/docker.sources ]] ||
+            die 'Docker repository files must not be symlinks.'
+    fi
 }
 
 render_docker_source() {
@@ -71,12 +112,14 @@ install_docker_packages() {
         DOCKER_TEMP_UNITS+=(containerd.service)
         systemctl mask --runtime containerd.service
     fi
-    curl --fail --silent --show-error --proto '=https' --tlsv1.2 --connect-timeout 10 --max-time 60 \
-        --retry 2 --max-filesize 1048576 https://download.docker.com/linux/debian/gpg -o "$RUN_DIR/docker.asc"
-    grep -q '^-----BEGIN PGP PUBLIC KEY BLOCK-----' "$RUN_DIR/docker.asc" || die 'Invalid Docker signing key response.'
-    install -d -m 0755 /etc/apt/keyrings
-    write_config /etc/apt/keyrings/docker.asc < "$RUN_DIR/docker.asc"
-    render_docker_source | write_config /etc/apt/sources.list.d/docker.sources
+    if ((DOCKER_REUSE_SOURCE == 0)); then
+        curl --fail --silent --show-error --proto '=https' --tlsv1.2 --connect-timeout 10 --max-time 60 \
+            --retry 2 --max-filesize 1048576 https://download.docker.com/linux/debian/gpg -o "$RUN_DIR/docker.asc"
+        grep -q '^-----BEGIN PGP PUBLIC KEY BLOCK-----' "$RUN_DIR/docker.asc" || die 'Invalid Docker signing key response.'
+        install -d -m 0755 /etc/apt/keyrings
+        write_config /etc/apt/keyrings/docker.asc < "$RUN_DIR/docker.asc"
+        render_docker_source | write_config /etc/apt/sources.list.d/docker.sources
+    fi
     apt_run update --error-on=any
     apt_run install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 }

@@ -137,7 +137,7 @@ Debian 13 服务器初始化向导
 - `docker-compose-plugin`：`docker compose`。
 - `docker-buildx-plugin`：`docker buildx`。
 
-支持 amd64、arm64、armhf 和 ppc64el。脚本备份并配置官方签名密钥与 `docker.sources`，安装仓库候选版本；已有官方版可能补齐或更新组件。遇到 `docker.io`、发行版 `containerd/runc` 等冲突包时会在初始化前退出，需先自行处理迁移，不会自动卸载它们。如果其他 APT 文件已经声明 Docker 源，先合并到 `docker.sources`，避免重复源和签名配置冲突。
+支持 amd64、arm64、armhf 和 ppc64el。如果已有启用的 Docker 官方 Debian 源（包括 `docker.list` 或 `.sources` 格式），脚本直接复用，保留原有地址、发行版和签名配置，不新增重复源；没有时才备份并配置官方签名密钥与 `docker.sources`。APT 仍按现有信任配置验证仓库并安装候选版本，已有官方版可能补齐或更新组件。已有源如果失效、发行版不匹配或存在签名配置冲突，需要修正原有配置。遇到 `docker.io`、发行版 `containerd/runc` 等冲突包时会在初始化前退出，需先自行处理迁移，不会自动卸载它们。
 
 下载和安装发生在回滚倒计时之前。首次安装的服务会临时禁止自动启动，完成 UFW 配置后再解除限制并启动 Docker、containerd，设置开机启动。检查使用本机 Unix socket 验证服务，并输出 Engine、Compose、Buildx 版本，不依赖拉取测试镜像。
 
