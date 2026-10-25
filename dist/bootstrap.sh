@@ -114,7 +114,6 @@ validate_options() {
     ZRAM_PERCENT=$((10#$ZRAM_PERCENT))
     NOFILE=$((10#$NOFILE))
     [[ -z $SSH_PORT ]] || SSH_PORT=$((10#$SSH_PORT))
-    [[ $SWAP_MIB == 0 || $ZRAM_PERCENT == 0 ]] || die 'Choose swap or zram per run.'
     [[ -z $KEY_FILE || -z $GITHUB_USER ]] || die 'Choose key-file or github-user.'
     [[ $KEY_USER =~ ^[a-z_][a-z0-9_-]*[$]?$ ]] || die 'Invalid key-user.'
     [[ -z $GITHUB_USER || $GITHUB_USER =~ ^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}$ ]] || die 'Invalid GitHub username.'
@@ -551,7 +550,7 @@ net.ipv4.tcp_congestion_control = bbr
 EOF
         sysctl -p /etc/sysctl.d/60-server-bootstrap-bbr.conf
     fi
-    if ((SWAP_MIB)); then configure_swap; fi
+    if ((SWAP_MIB)); then configure_swap /var/lib/server-bootstrap.swap /etc/fstab; fi
     if ((ZRAM_PERCENT)); then
         apt_run install -y systemd-zram-generator
         write_config /etc/systemd/zram-generator.conf.d/60-server-bootstrap.conf <<EOF
@@ -615,7 +614,7 @@ update_hosts_hostname() {
 }
 
 configure_swap() {
-    local swap=/var/lib/server-bootstrap.swap available bytes
+    local swap=$1 fstab=$2 available bytes active_priority
     bytes=$((10#$SWAP_MIB * 1024 * 1024))
     if [[ -e $swap ]]; then
         [[ ! -L $swap && $(stat -c %s "$swap") == "$bytes" ]] || die 'Existing managed swap has a different size or is a symlink.'
@@ -627,11 +626,31 @@ configure_swap() {
         chmod 600 "$swap"
         mkswap "$swap"
     fi
-    if ! swapon --show=NAME --noheadings | grep -Fxq "$swap"; then swapon "$swap"; fi
-    save_file /etc/fstab
-    if ! awk -v p="$swap" '$1 == p {found=1} END {exit !found}' /etc/fstab; then
-        printf '%s none swap sw 0 0\n' "$swap" >> /etc/fstab
+    save_file "$fstab"
+    render_swap_fstab "$swap" < "$fstab" > "$RUN_DIR/fstab-swap"
+    active_priority=$(swapon --show=NAME,PRIO --noheadings | awk -v p="$swap" '$1 == p {print $2}')
+    if [[ -z $active_priority ]]; then
+        swapon --priority 10 "$swap"
+    elif [[ $active_priority != 10 ]]; then
+        log 'Existing disk swap remains active; its priority will change to 10 after a manual reboot.'
     fi
+    cat "$RUN_DIR/fstab-swap" > "$fstab"
+}
+
+render_swap_fstab() {
+    awk -v p="$1" '
+        $1 == p && $3 == "swap" {
+            found = 1
+            count = split($4, options, ",")
+            updated = ""
+            for (i = 1; i <= count; i++) {
+                if (options[i] !~ /^pri=/) updated = updated options[i] ","
+            }
+            $4 = updated "pri=10"
+        }
+        { print }
+        END { if (!found) print p " none swap sw,pri=10 0 0" }
+    '
 }
 
 apply_all() {
@@ -1202,14 +1221,47 @@ wizard_firewall() {
     TRUSTED_IPS=(${VALUES[@]+"${VALUES[@]}"})
 }
 
+wizard_memory_kib() {
+    awk '$1 == "MemTotal:" {print $2; exit}' /proc/meminfo 2>/dev/null
+}
+
+wizard_swap_size() {
+    local memory_kib suggested=2048
+    memory_kib=$(wizard_memory_kib || true)
+    if [[ $memory_kib =~ ^[0-9]+$ ]] && ((memory_kib >= 8 * 1024 * 1024 && memory_kib <= 64 * 1024 * 1024)); then
+        suggested=$((memory_kib / 2048))
+        printf '检测到物理内存约 %s MiB，磁盘 Swap 默认按内存的一半设置，可手动修改。\n' "$((memory_kib / 1024))"
+    else
+        printf '物理内存不在 8–64 GiB 范围内或无法读取，磁盘 Swap 默认 2048 MiB，可手动修改。\n'
+    fi
+    wizard_number "磁盘 Swap 大小 MiB [$suggested]：" "$suggested" 256 65536
+    SWAP_MIB=$ANSWER
+}
+
 wizard_advanced() {
-    if ! wizard_yes '是否配置 BBR、交换空间、资源限制、DNS 或主机名'; then return 0; fi
+    cat <<'EOF'
+
+高级设置（按需选择）：
+  BBR：切换 TCP 拥塞控制算法，影响网络传输。
+  交换空间：可选磁盘 Swap、压缩内存 ZRAM，或两者同时使用。
+  文件描述符上限：调整进程可同时打开的文件和网络连接数量上限。
+  主机名：修改这台服务器的名称。
+  DNS：修改域名解析服务器地址，仅支持已有 systemd-resolved 的系统。
+  依赖清理：删除 APT 判定不再需要的软件包。
+  确认窗口：设置通过新 SSH 连接确认配置的时限，默认 10 分钟。
+选择 y 后会逐项询问，不会一次启用全部选项；回车跳过，保持这些设置和默认确认时限。
+EOF
+    if ! wizard_yes '是否进入高级设置'; then return 0; fi
     if wizard_yes '启用 BBR 拥塞控制'; then BBR=1; fi
-    printf '交换空间：1) 保持现状  2) 新建 Swap 文件  3) 配置 ZRAM（重启后生效）\n'
-    wizard_choice '选择 [1]：' 1 '1 2 3'
+    printf '交换空间：\n1) 保持现状\n2) 新建磁盘 Swap\n3) 配置 ZRAM（重启后生效）\n4) ZRAM + 磁盘 Swap（ZRAM 优先，磁盘提供额外容量）\n'
+    wizard_choice '选择 [1]：' 1 '1 2 3 4'
     case "$ANSWER" in
-        2) wizard_number 'Swap 大小 MiB [2048]：' 2048 256 65536; SWAP_MIB=$ANSWER ;;
-        3) wizard_number 'ZRAM 占内存百分比 [50]：' 50 1 100; ZRAM_PERCENT=$ANSWER ;;
+        2) wizard_swap_size ;;
+        3) wizard_number 'ZRAM 逻辑容量占物理内存百分比 [50]：' 50 1 100; ZRAM_PERCENT=$ANSWER ;;
+        4)
+            wizard_number 'ZRAM 逻辑容量占物理内存百分比 [50]：' 50 1 100; ZRAM_PERCENT=$ANSWER
+            wizard_swap_size
+            printf 'ZRAM 优先级为 100，脚本管理的磁盘 Swap 为 10；ZRAM 在手动重启后生效。\n' ;;
     esac
     if wizard_yes '调整文件描述符上限'; then
         wizard_number '上限 [65535]：' 65535 1024 1048576; NOFILE=$ANSWER

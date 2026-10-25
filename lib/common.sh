@@ -105,7 +105,6 @@ validate_options() {
     ZRAM_PERCENT=$((10#$ZRAM_PERCENT))
     NOFILE=$((10#$NOFILE))
     [[ -z $SSH_PORT ]] || SSH_PORT=$((10#$SSH_PORT))
-    [[ $SWAP_MIB == 0 || $ZRAM_PERCENT == 0 ]] || die 'Choose swap or zram per run.'
     [[ -z $KEY_FILE || -z $GITHUB_USER ]] || die 'Choose key-file or github-user.'
     [[ $KEY_USER =~ ^[a-z_][a-z0-9_-]*[$]?$ ]] || die 'Invalid key-user.'
     [[ -z $GITHUB_USER || $GITHUB_USER =~ ^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}$ ]] || die 'Invalid GitHub username.'

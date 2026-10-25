@@ -42,10 +42,66 @@ validate_options
                      '--allow 22/sctp', '--allow 22/tcp@999.1.1.1', '--allow 1:65535/tcp',
                      '--trusted-ip "127.0.0.1;id"', '--rollback-seconds 1',
                      '--timezone ../../etc', '--hostname a.b', '--github-user ../root',
-                     '--swap-mib 1024 --zram-percent 50', '--dns 1.1.1.1,',
+                     '--swap-mib 255 --zram-percent 50', '--zram-percent 101', '--dns 1.1.1.1,',
                      '--key-file a --github-user octocat', '--unknown']:
             with self.subTest(args=args):
                 self.shell(f'parse_args plan {args}\nvalidate_options', ok=False)
+
+    def test_combined_swap_and_zram_configuration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.shell('''RUN_DIR="$TMP"
+parse_args plan --swap-mib 2048 --zram-percent 50
+validate_options
+configure_swap() { printf '%s %s\\n' "$*" "$SWAP_MIB" > "$TMP/swap-call"; }
+apt_run() { :; }
+write_config() { cat > "$TMP/zram.conf"; }
+configure_optional
+''', env={'TMP': tmp})
+            self.assertEqual((Path(tmp) / 'swap-call').read_text().strip(),
+                             '/var/lib/server-bootstrap.swap /etc/fstab 2048')
+            config = (Path(tmp) / 'zram.conf').read_text()
+            self.assertIn('zram-size = ram * 50 / 100', config)
+            self.assertIn('swap-priority = 100', config)
+
+    def test_swap_priority_is_persisted_without_disabling_active_swap(self):
+        for priority in ['', '-2', '200', '10']:
+            with self.subTest(priority=priority), tempfile.TemporaryDirectory() as tmp:
+                folder = Path(tmp)
+                swap = folder / 'swap'
+                swap.touch()
+                fstab = folder / 'fstab'
+                original = '# keep comment\n/dev/other none swap sw,pri=20 0 0\n'
+                fstab.write_text(original + f'{swap} none swap sw,discard,pri=200 0 0 # managed\n')
+                result = self.shell('''RUN_DIR="$TMP/run"; mkdir -p "$RUN_DIR"
+SWAP_MIB=1024
+stat() { echo 1073741824; }
+blkid() { echo swap; }
+swapon() {
+    if [[ $1 == --show=NAME,PRIO ]]; then
+        if [[ -n $PRIORITY ]]; then printf '%s %s\\n' "$TMP/swap" "$PRIORITY"; fi
+    else
+        printf '%s\\n' "$*" >> "$TMP/activations"
+        PRIORITY=10
+    fi
+}
+swapoff() { echo 'Unexpected swapoff' >&2; exit 99; }
+configure_swap "$TMP/swap" "$TMP/fstab"
+cp "$TMP/fstab" "$TMP/once"
+configure_swap "$TMP/swap" "$TMP/fstab"
+cmp "$TMP/once" "$TMP/fstab"
+''', env={'TMP': tmp, 'PRIORITY': priority})
+                self.assertEqual(fstab.read_text(), original + f'{swap} none swap sw,discard,pri=10 0 0 # managed\n')
+                activation = folder / 'activations'
+                if priority:
+                    self.assertFalse(activation.exists())
+                    if priority != '10':
+                        self.assertIn('after a manual reboot', result.stdout)
+                else:
+                    self.assertEqual(activation.read_text(), f'--priority 10 {swap}\n')
+
+    def test_swap_fstab_adds_missing_entry(self):
+        result = self.shell("printf '# existing\\n' | render_swap_fstab /var/lib/server-bootstrap.swap")
+        self.assertEqual(result.stdout, '# existing\n/var/lib/server-bootstrap.swap none swap sw,pri=10 0 0\n')
 
     def test_run_id_cannot_escape_state_directory(self):
         self.shell('parse_args rollback ../../etc', ok=False)

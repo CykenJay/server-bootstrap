@@ -136,7 +136,7 @@ net.ipv4.tcp_congestion_control = bbr
 EOF
         sysctl -p /etc/sysctl.d/60-server-bootstrap-bbr.conf
     fi
-    if ((SWAP_MIB)); then configure_swap; fi
+    if ((SWAP_MIB)); then configure_swap /var/lib/server-bootstrap.swap /etc/fstab; fi
     if ((ZRAM_PERCENT)); then
         apt_run install -y systemd-zram-generator
         write_config /etc/systemd/zram-generator.conf.d/60-server-bootstrap.conf <<EOF
@@ -200,7 +200,7 @@ update_hosts_hostname() {
 }
 
 configure_swap() {
-    local swap=/var/lib/server-bootstrap.swap available bytes
+    local swap=$1 fstab=$2 available bytes active_priority
     bytes=$((10#$SWAP_MIB * 1024 * 1024))
     if [[ -e $swap ]]; then
         [[ ! -L $swap && $(stat -c %s "$swap") == "$bytes" ]] || die 'Existing managed swap has a different size or is a symlink.'
@@ -212,11 +212,31 @@ configure_swap() {
         chmod 600 "$swap"
         mkswap "$swap"
     fi
-    if ! swapon --show=NAME --noheadings | grep -Fxq "$swap"; then swapon "$swap"; fi
-    save_file /etc/fstab
-    if ! awk -v p="$swap" '$1 == p {found=1} END {exit !found}' /etc/fstab; then
-        printf '%s none swap sw 0 0\n' "$swap" >> /etc/fstab
+    save_file "$fstab"
+    render_swap_fstab "$swap" < "$fstab" > "$RUN_DIR/fstab-swap"
+    active_priority=$(swapon --show=NAME,PRIO --noheadings | awk -v p="$swap" '$1 == p {print $2}')
+    if [[ -z $active_priority ]]; then
+        swapon --priority 10 "$swap"
+    elif [[ $active_priority != 10 ]]; then
+        log 'Existing disk swap remains active; its priority will change to 10 after a manual reboot.'
     fi
+    cat "$RUN_DIR/fstab-swap" > "$fstab"
+}
+
+render_swap_fstab() {
+    awk -v p="$1" '
+        $1 == p && $3 == "swap" {
+            found = 1
+            count = split($4, options, ",")
+            updated = ""
+            for (i = 1; i <= count; i++) {
+                if (options[i] !~ /^pri=/) updated = updated options[i] ","
+            }
+            $4 = updated "pri=10"
+        }
+        { print }
+        END { if (!found) print p " none swap sw,pri=10 0 0" }
+    '
 }
 
 apply_all() {

@@ -58,6 +58,7 @@ source "$WORK/library.sh"
 eval "$(declare -f defaults | sed '1s/defaults/defaults_original/')"
 defaults() { defaults_original; STATE_DIR="$WORK/state"; }
 require_host() { :; }
+wizard_memory_kib() { printf '%s\\n' "${TEST_MEMORY_KIB:-25165824}"; }
 flock() {
     if [[ $1 == -u ]]; then echo UNLOCK >> "$WORK/events";
     else echo LOCK >> "$WORK/events"; fi
@@ -157,6 +158,45 @@ main
         self.assertEqual(code, 0, output)
         self.assertIn('CONFIRM_MARKER|' + run_id, output)
         self.assertNotIn('APPLY_MARKER', output)
+
+    def test_combined_zram_and_swap_can_be_selected(self):
+        answers = ['1', '3', '', '1', '1', '1', '', 'n', 'y', 'n', '4',
+                   '101', '50', '255', '2048', 'n', '', '', 'n', '', 'y']
+        code, output = self.run_ui(('\n'.join(answers) + '\n').encode())
+        self.assertEqual(code, 0, output)
+        self.assertIn('请输入 1 到 100', output)
+        self.assertIn('请输入 256 到 65536', output)
+        self.assertIn('ADVANCED|0|2048|50|0|||600', output)
+        self.assertIn('ZRAM 优先级为 100', output)
+
+    def test_swap_defaults_to_half_of_24_gib_in_both_modes(self):
+        for mode in ['2', '4']:
+            with self.subTest(mode=mode):
+                answers = ['1', '3', '', '1', '1', '1', '', 'n', 'y', 'n', mode]
+                if mode == '4':
+                    answers += ['']
+                answers += ['', 'n', '', '', 'n', '', 'y']
+                code, output = self.run_ui(('\n'.join(answers) + '\n').encode())
+                self.assertEqual(code, 0, output)
+                zram = 50 if mode == '4' else 0
+                self.assertIn(f'ADVANCED|0|12288|{zram}|0|||600', output)
+                self.assertIn('磁盘 Swap 大小 MiB [12288]', output)
+
+    def test_swap_size_range_boundaries_and_missing_memory(self):
+        cases = [(8 * 1024 * 1024, 4096), (64 * 1024 * 1024, 32768),
+                 (8 * 1024 * 1024 - 1, 2048), (64 * 1024 * 1024 + 1, 2048),
+                 (24 * 1024 * 1024 - 1, 12287), ('', 2048)]
+        for memory, expected in cases:
+            with self.subTest(memory=memory):
+                result = subprocess.run(['bash', '-c', '''set -Eeuo pipefail
+source "$WORK/library.sh"
+wizard_memory_kib() { printf '%s\\n' "$TEST_MEMORY_KIB"; }
+wizard_swap_size
+printf 'SWAP_RESULT=%s\\n' "$SWAP_MIB"
+'''], input='\n', text=True, capture_output=True,
+                    env={**os.environ, **self.env, 'TEST_MEMORY_KIB': str(memory)})
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(f'SWAP_RESULT={expected}', result.stdout)
 
     def test_pending_default_keeps_rollback_armed(self):
         self.pending()
