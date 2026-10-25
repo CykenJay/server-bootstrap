@@ -12,7 +12,7 @@
 bash build.sh
 ```
 
-输出 **`dist/bootstrap.sh`**，包含全部模块。服务器只需要这一个文件，无需上传源码目录。构建产物不进入版本控制；也可通过 `bash build.sh /tmp/init-server.sh` 指定输出位置。
+输出 **`dist/bootstrap.sh`**，包含全部模块。服务器只需要这一个文件，无需上传源码目录。仓库包含此单文件，修改源码后需重新构建并一同提交；也可通过 `bash build.sh /tmp/init-server.sh` 指定输出位置。
 
 将示例中的 `your-server` 换成服务器地址：
 
