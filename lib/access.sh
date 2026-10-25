@@ -47,6 +47,10 @@ prepare_access() {
         printf 'F2B_ACTIVE=%q\nF2B_ENABLED=%q\nUFW_ACTIVE=%q\nUFW_ENABLED=%q\n' "$F2B_ACTIVE" "$F2B_ENABLED" "$UFW_ACTIVE" "$UFW_ENABLED"
         printf 'DISABLE_PASSWORD=%q\nDISABLE_ROOT=%q\n' "$DISABLE_PASSWORD" "$DISABLE_ROOT"
         printf 'F2B_TEMP_MASK=%q\n' "$F2B_TEMP_MASK"
+        printf 'DOCKER_INSTALL=%q\n' "$DOCKER_INSTALL"
+        printf 'DOCKER_TEMP_UNITS=('
+        if ((${#DOCKER_TEMP_UNITS[@]})); then printf '%q ' "${DOCKER_TEMP_UNITS[@]}"; fi
+        printf ')\n'
         printf 'SSH_PORTS=('; printf '%q ' "${SSH_PORTS[@]}"; printf ')\n'
     } > "$RUN_DIR/access.env"
 }
@@ -270,6 +274,7 @@ verify_access() {
     done
     fail2ban-client status sshd >/dev/null
     getent ahosts deb.debian.org >/dev/null
+    if ((DOCKER_INSTALL)); then verify_docker; fi
 }
 
 cleanup_timer() {
@@ -309,6 +314,7 @@ rollback_access() {
         die 'Only a pending access transaction can be rolled back.'
     fi
     log "Restoring access configuration for $RUN_ID."
+    if ((DOCKER_INSTALL)); then release_docker_masks || failed=1; fi
     timeout 30 systemctl stop fail2ban || failed=1
     if ((F2B_TEMP_MASK)); then
         systemctl unmask --runtime fail2ban.service || failed=1

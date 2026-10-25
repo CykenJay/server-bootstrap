@@ -10,6 +10,8 @@ BUNDLED=0
 # BEGIN MODULES
 # shellcheck source=lib/common.sh
 source "$BASE_DIR/lib/common.sh"
+# shellcheck source=lib/docker.sh
+source "$BASE_DIR/lib/docker.sh"
 # shellcheck source=lib/system.sh
 source "$BASE_DIR/lib/system.sh"
 # shellcheck source=lib/access.sh

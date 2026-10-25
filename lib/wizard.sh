@@ -200,6 +200,14 @@ wizard_advanced() {
     ROLLBACK_SECONDS=$((ANSWER * 60))
 }
 
+wizard_docker() {
+    printf '\nDocker：使用官方软件源安装 Engine、Compose 和 Buildx。\n'
+    if wizard_yes '是否安装 Docker（已安装官方版时补齐或更新组件）'; then
+        DOCKER_INSTALL=1
+        printf '提示：Docker 发布的容器端口可能绕过普通 UFW 入站规则，需要单独控制访问。\n'
+    fi
+}
+
 wizard_summary() {
     printf '\n========== 执行清单 ==========\n'
     printf '基础：更新已装软件、安装工具、UFW、Fail2ban、安全更新、NTP、日志管理与配置备份\n'
@@ -214,6 +222,10 @@ wizard_summary() {
     else printf '公钥导入：跳过\n'; fi
     if ((DISABLE_PASSWORD)); then printf '密码/键盘交互登录：关闭\n'; else printf '密码登录策略：保留\n'; fi
     if ((DISABLE_ROOT)); then printf 'root SSH 登录：禁止\n'; else printf 'root 登录策略：保留\n'; fi
+    if ((DOCKER_INSTALL)); then
+        printf 'Docker：安装官方 Engine、Compose、Buildx，并启用开机启动\n'
+        printf 'Docker 发布端口需单独限制访问；安装和升级不会随访问配置回滚。\n'
+    else printf 'Docker：不执行安装模块\n'; fi
     if ((BBR)); then printf 'BBR：启用\n'; fi
     if ((SWAP_MIB)); then printf '新建 Swap：%s MiB\n' "$SWAP_MIB"; fi
     if ((ZRAM_PERCENT)); then printf 'ZRAM：内存的 %s%%，重启生效\n' "$ZRAM_PERCENT"; fi
@@ -257,6 +269,7 @@ wizard() {
     wizard_timezone
     wizard_ssh
     wizard_firewall
+    wizard_docker
     wizard_advanced
     validate_options
     wizard_summary

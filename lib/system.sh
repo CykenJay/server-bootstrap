@@ -24,6 +24,7 @@ preflight() {
         [[ $state != masked* ]] || die "$service is masked. Resolve this before applying."
     done
     if [[ -f $STATE_DIR/pending ]]; then die "Confirm or roll back pending run $(cat "$STATE_DIR/pending") first."; fi
+    if ((DOCKER_INSTALL)); then docker_preflight; fi
     if ((DISABLE_PASSWORD || DISABLE_ROOT)); then verify_key_session; fi
     if [[ -n $KEY_FILE ]]; then [[ -f $KEY_FILE && -r $KEY_FILE ]] || die 'Cannot read key file.'; fi
     if [[ -n $KEY_FILE || -n $GITHUB_USER ]]; then
@@ -226,10 +227,12 @@ apply_all() {
     trap 'rc=$?; if ((rc != 0)); then apply_failed "$rc"; fi' EXIT
     trap 'exit 130' INT TERM HUP
     install_packages
+    if ((DOCKER_INSTALL)); then install_docker_packages; fi
     configure_system
     prepare_access
     arm_rollback
     configure_access
+    if ((DOCKER_INSTALL)); then start_docker; fi
     verify_access
     printf 'pending\n' > "$RUN_DIR/status"
     trap - EXIT INT TERM HUP
@@ -249,6 +252,7 @@ apply_failed() {
     log "Initialization failed (exit $rc)."
     if ((ACCESS_ARMED)); then rollback_access || true; fi
     if ((F2B_TEMP_MASK)); then systemctl unmask --runtime fail2ban.service || true; fi
+    if ((DOCKER_INSTALL)); then release_docker_masks || true; fi
     exit "$rc"
 }
 

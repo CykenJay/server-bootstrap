@@ -11,6 +11,8 @@ defaults() {
     DISABLE_PASSWORD=0 DISABLE_ROOT=0 AUTH_INFO=''
     BBR=0 SWAP_MIB=0 ZRAM_PERCENT=0 NOFILE=0 HOSTNAME_VALUE='' DNS=''
     AUTOREMOVE=0 ROLLBACK_SECONDS=600 AUTOMATIC=0 CONSOLE=0
+    DOCKER_INSTALL=0
+    DOCKER_TEMP_UNITS=()
     ALLOW_RULES=() SSH_SOURCES=() TRUSTED_IPS=()
 }
 
@@ -38,6 +40,7 @@ Without a terminal, explicitly choose plan or apply; no changes occur by default
   --rollback-seconds N     Confirmation window, 120..3600 seconds; default 600
   --console               Confirm from recovery console (authentication changes excluded)
   --bbr                   Enable BBR with fq
+  --docker                Install Docker Engine, Compose and Buildx from Docker APT
   --swap-mib N             Create a dedicated swap file, 256..65536 MiB
   --zram-percent N         Configure zram0, 1..100% of RAM, applied after reboot
   --nofile N               PAM and future systemd services, 1024..1048576
@@ -63,6 +66,7 @@ parse_args() {
         case "$1" in
             --help|-h) usage; exit 0 ;;
             --bbr) BBR=1; shift ;;
+            --docker) DOCKER_INSTALL=1; shift ;;
             --disable-password) DISABLE_PASSWORD=1; shift ;;
             --disable-root) DISABLE_ROOT=1; shift ;;
             --autoremove) AUTOREMOVE=1; shift ;;
@@ -237,6 +241,10 @@ Debian 13 initialization plan (no changes):
   Access changes require confirmation within ${ROLLBACK_SECONDS}s from a new SSH session.
   Backups: $STATE_DIR/runs/RUN_ID; package upgrades are not rolled back.
 EOF
+    if ((DOCKER_INSTALL)); then
+        log 'Docker: install official Engine + Compose + Buildx; start after UFW setup.'
+        log 'Published Docker ports require separate access controls; ordinary UFW rules may be bypassed.'
+    fi
     local rule
     for rule in ${SSH_SOURCES[@]+"${SSH_SOURCES[@]}"}; do log "SSH source: $rule"; done
     for rule in ${ALLOW_RULES[@]+"${ALLOW_RULES[@]}"}; do log "Additional allow: $rule"; done

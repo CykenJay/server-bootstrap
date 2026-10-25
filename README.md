@@ -58,6 +58,7 @@ Debian 13 服务器初始化向导
 | 登录策略 | 已验证公钥会话才显示关闭密码选项；非 root sudo 会话还可选择禁止 root 登录 | 保留现有策略 |
 | 业务端口 | 只放行 SSH / 网站 HTTP 和 HTTPS / 自定义 | 不新增业务端口 |
 | Fail2ban 白名单 | 输入可信 IP 或网段，多个用逗号或空格分隔 | 不添加额外白名单 |
+| Docker | 是否安装官方 Docker Engine、Compose 和 Buildx | 不安装 |
 | 高级设置 | 先询问是否展开，选择后才显示详细选项 | 跳过全部高级设置 |
 | 最终确认 | 显示全部选择，再询问是否开始 | 取消，不执行 |
 
@@ -114,6 +115,24 @@ Debian 13 服务器初始化向导
 
 脚本拒绝与运行中的 firewalld、nftables、netfilter-persistent 服务混用，也不支持 ssh.socket 激活方式。手工配置的规则仍需管理员检查。Docker 发布的端口可能绕过普通 UFW 入站规则，参见 [Docker 防火墙说明](https://docs.docker.com/engine/network/packet-filtering-firewalls/)。
 
+## 安装 Docker
+
+在向导的 Docker 问题回答 `y`，最终清单会显示将安装 Docker。安装使用 [Docker 官方 Debian APT 方案](https://docs.docker.com/engine/install/debian/)，包括：
+
+- `docker-ce`：Docker Engine。
+- `docker-ce-cli`：命令行工具。
+- `containerd.io`：容器运行时。
+- `docker-compose-plugin`：`docker compose`。
+- `docker-buildx-plugin`：`docker buildx`。
+
+支持 amd64、arm64、armhf 和 ppc64el。脚本备份并配置官方签名密钥与 `docker.sources`，安装仓库候选版本；已有官方版可能补齐或更新组件。遇到 `docker.io`、发行版 `containerd/runc` 等冲突包时会在初始化前退出，需先自行处理迁移，不会自动卸载它们。如果其他 APT 文件已经声明 Docker 源，先合并到 `docker.sources`，避免重复源和签名配置冲突。
+
+下载和安装发生在回滚倒计时之前。首次安装的服务会临时禁止自动启动，完成 UFW 配置后再解除限制并启动 Docker、containerd，设置开机启动。检查使用本机 Unix socket 验证服务，并输出 Engine、Compose、Buildx 版本，不依赖拉取测试镜像。
+
+Docker 使用 root 或 sudo 管理；脚本不自动把用户加入 docker 组，也不覆盖 `daemon.json`。安装或升级及容器数据不属于访问配置回滚范围。
+
+**容器发布端口需单独控制访问。**本脚本的 UFW 业务端口规则不能保证限制 Docker 的发布端口，也不会自动生成 DOCKER-USER 规则或禁用 Docker 的防火墙管理。通过反向代理访问的容器可绑定本机回环地址；公网发布的容器需按实际部署设置访问策略。
+
 ## 高级设置与公钥认证
 
 展开高级设置后可以选择：BBR、Swap 或 ZRAM、文件描述符上限、主机名、DNS、删除无用依赖、确认窗口长度。默认都不修改。
@@ -149,6 +168,8 @@ bash dist/bootstrap.sh plan
 
 `apply`、`status`、`confirm RUN_ID`、`rollback RUN_ID` 仍可显式调用。命令行接口的默认时区仍为 UTC；交互向导默认保留当前时区。
 
+自动化安装 Docker 可使用 `apply --docker`，只预览可使用 `plan --docker`。
+
 本地测试包含真实伪终端交互、取消/EOF 不执行、参数组合、自动识别待确认状态、释放锁后等待、单文件构建和恢复副本：
 
 ```bash
@@ -165,6 +186,14 @@ docker run --rm \
 ```
 
 容器检查验证 ShellCheck、OpenSSH/Fail2ban 配置、UFW dry-run、APT 配置和 systemd 单元。公网重连、断线和重启回滚仍需在有恢复控制台的测试虚拟机上验证。
+
+验证 Docker 官方软件源和软件包安装（不启动嵌套 Docker daemon，不挂载宿主机 Docker socket）：
+
+```bash
+docker run --rm \
+  --mount "type=bind,source=$PWD,target=/source,readonly" \
+  debian:trixie-slim bash /source/tests/docker-packages.sh
+```
 
 在未安装 Python 的干净容器中校验单文件地址检查、配置编辑和公钥合并：
 

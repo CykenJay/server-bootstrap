@@ -63,6 +63,7 @@ flock() {
     else echo LOCK >> "$WORK/events"; fi
 }
 apply_all() {
+    printf 'DOCKER_MARKER|%s\\n' "$DOCKER_INSTALL"
     printf 'APPLY_MARKER|%s|%s|%s|%s\\n' "$TIMEZONE" "$SSH_PORT" "${ALLOW_RULES[*]:-}" "${TRUSTED_IPS[*]:-}"
     printf 'ADVANCED|%s|%s|%s|%s|%s|%s|%s\\n' "$BBR" "$SWAP_MIB" "$ZRAM_PERCENT" "$NOFILE" "$HOSTNAME_VALUE" "$DNS" "$ROLLBACK_SECONDS"
 }
@@ -94,23 +95,30 @@ main
         self.assertIn('请选择列出的编号', output)
 
     def test_preview_on_real_bundle_does_not_need_root_or_sources(self):
-        code, output = self.run_ui(b'2\n' + b'\n' * 7, real=True)
+        code, output = self.run_ui(b'2\n' + b'\n' * 8, real=True)
         self.assertEqual(code, 0, output)
         self.assertIn('预览结束，未修改系统', output)
         self.assertIn('本次保留登录策略', output)
 
     def test_enter_at_final_confirmation_cancels(self):
-        code, output = self.run_ui(b'1\n' + b'\n' * 8)
+        code, output = self.run_ui(b'1\n' + b'\n' * 9)
         self.assertEqual(code, 0, output)
         self.assertIn('已取消，未修改系统', output)
         self.assertNotIn('APPLY_MARKER', output)
         self.assertFalse((self.work / 'state').exists())
 
     def test_explicit_yes_applies_and_unlocks_before_wait(self):
-        code, output = self.run_ui(b'1\n' + b'\n' * 7 + b'y\n')
+        code, output = self.run_ui(b'1\n' + b'\n' * 8 + b'y\n')
         self.assertEqual(code, 0, output)
         self.assertIn('APPLY_MARKER', output)
         self.assertIn('WAIT_MARKER', output)
+        self.assertIn('DOCKER_MARKER|0', output)
+
+    def test_docker_can_be_selected_without_cli_flags(self):
+        code, output = self.run_ui(b'1\n' + b'\n' * 6 + b'y\nn\ny\n')
+        self.assertEqual(code, 0, output)
+        self.assertIn('DOCKER_MARKER|1', output)
+        self.assertIn('安装官方 Engine、Compose、Buildx', output)
 
     def test_eof_never_applies(self):
         code, output = self.run_ui(b'1\n\x04')
@@ -120,7 +128,7 @@ main
 
     def test_invalid_input_reprompts_and_custom_rules_are_assembled(self):
         answers = ['1', '2', 'bad', '2222', '1', '1', '3', '0', '443', '2',
-                   'invalid', '2001:db8::/32', 'n', '192.0.2.0/24', 'n', 'y']
+                   'invalid', '2001:db8::/32', 'n', '192.0.2.0/24', 'n', 'n', 'y']
         code, output = self.run_ui(('\n'.join(answers) + '\n').encode())
         self.assertEqual(code, 0, output)
         self.assertIn('端口必须', output)
@@ -135,7 +143,7 @@ main
         return run_id
 
     def test_advanced_settings_and_range_validation(self):
-        answers = ['1', '3', '', '1', '1', '2', '', 'y', 'y', '2',
+        answers = ['1', '3', '', '1', '1', '2', '', 'n', 'y', 'y', '2',
                    '16', '1024', 'y', '65535', 'bad.name', 'web-01',
                    'invalid', '1.1.1.1,2606:4700:4700::1111', 'n', '0', '15', 'y']
         code, output = self.run_ui(('\n'.join(answers) + '\n').encode())
