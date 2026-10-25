@@ -88,6 +88,7 @@ main
         code, output = self.run_ui(b'0\n', real=True)
         self.assertEqual(code, 0, output)
         self.assertIn('服务器初始化向导', output)
+        self.assertIn('选择 [默认：1]', output)
         self.assertNotIn('APPLY_MARKER', output)
 
     def test_menu_rejects_multiple_selections(self):
@@ -100,11 +101,14 @@ main
         self.assertEqual(code, 0, output)
         self.assertIn('预览结束，未修改系统', output)
         self.assertIn('本次保留登录策略', output)
+        self.assertIn('新增 SSH 端口 [默认：不新增，保留现有端口]', output)
+        self.assertIn('是否进入高级设置（y/n） [默认：n（否）]', output)
 
     def test_enter_at_final_confirmation_cancels(self):
         code, output = self.run_ui(b'1\n' + b'\n' * 9)
         self.assertEqual(code, 0, output)
         self.assertIn('已取消，未修改系统', output)
+        self.assertIn('开始执行以上操作（y/n） [默认：n（否）]', output)
         self.assertNotIn('APPLY_MARKER', output)
         self.assertFalse((self.work / 'state').exists())
 
@@ -134,6 +138,8 @@ main
         self.assertEqual(code, 0, output)
         self.assertIn('端口必须', output)
         self.assertIn('地址格式不正确', output)
+        self.assertIn('端口号 [默认：无，必填]', output)
+        self.assertIn('允许的来源 IP/网段 [默认：所有地址]', output)
         self.assertIn('APPLY_MARKER|Asia/Shanghai|2222|443/udp@2001:db8::/32|192.0.2.0/24', output)
 
     def pending(self):
@@ -151,6 +157,9 @@ main
         self.assertEqual(code, 0, output)
         self.assertIn('请输入 256 到 65536', output)
         self.assertIn('ADVANCED|1|1024|0|65535|web-01|1.1.1.1,2606:4700:4700::1111|900', output)
+        self.assertIn('文件描述符上限 [默认：65535]', output)
+        self.assertIn('新主机名 [默认：保留现有主机名]', output)
+        self.assertIn('DNS 地址（仅支持已有 systemd-resolved） [默认：保留现有 DNS 配置]', output)
 
     def test_pending_run_is_selected_without_entering_id(self):
         run_id = self.pending()
@@ -180,7 +189,7 @@ main
                 self.assertEqual(code, 0, output)
                 zram = 50 if mode == '4' else 0
                 self.assertIn(f'ADVANCED|0|12288|{zram}|0|||600', output)
-                self.assertIn('磁盘 Swap 大小 MiB [12288]', output)
+                self.assertIn('磁盘 Swap 大小（MiB） [默认：12288]', output)
 
     def test_swap_size_range_boundaries_and_missing_memory(self):
         cases = [(8 * 1024 * 1024, 4096), (64 * 1024 * 1024, 32768),
@@ -204,6 +213,7 @@ printf 'SWAP_RESULT=%s\\n' "$SWAP_MIB"
         self.assertEqual(code, 0, output)
         self.assertNotIn('CONFIRM_MARKER', output)
         self.assertNotIn('ROLLBACK_MARKER', output)
+        self.assertIn('选择 [默认：0]', output)
         self.assertTrue((self.work / 'state/pending').exists())
 
     def test_pending_rollback_requires_yes(self):

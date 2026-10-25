@@ -4,7 +4,8 @@
 # with scripted input; EOF always exits before any system changes are requested.
 wizard_read() {
     local prompt=$1 fallback=${2:-}
-    printf '%s' "$prompt"
+    local display=${3:-${fallback:-无，必填}}
+    printf '%s [默认：%s]：' "$prompt" "$display"
     if ! IFS= read -r ANSWER; then
         printf '\n输入已结束，退出向导。\n'
         exit 0
@@ -26,11 +27,11 @@ wizard_choice() {
 wizard_yes() {
     local prompt=$1
     while :; do
-        wizard_read "$prompt [y/N]：" n
+        wizard_read "$prompt（y/n）" n 'n（否）'
         case "$ANSWER" in
             y|Y|yes|YES) return 0 ;;
             n|N|no|NO) return 1 ;;
-            *) printf '请输入 y 或 n；回车表示不启用。\n' ;;
+            *) printf '请输入 y 或 n；回车选择 n（否）。\n' ;;
         esac
     done
 }
@@ -47,9 +48,9 @@ wizard_number() {
 }
 
 wizard_addresses() {
-    local prompt=$1 item valid
+    local prompt=$1 display=${2:-无，必填} item valid
     while :; do
-        wizard_read "$prompt"
+        wizard_read "$prompt" '' "$display"
         VALUES=()
         IFS=', ' read -r -a VALUES <<< "$ANSWER"
         valid=1
@@ -71,12 +72,12 @@ wizard_timezone() {
     fi
     [[ -f /usr/share/zoneinfo/$current ]] || current=Etc/UTC
     printf '\n时区：1) 保留当前 %s  2) 北京时间  3) UTC  4) 自定义\n' "$current"
-    wizard_choice '选择 [1]：' 1 '1 2 3 4'
+    wizard_choice '选择' 1 '1 2 3 4'
     case "$ANSWER" in
         1) TIMEZONE=$current ;; 2) TIMEZONE=Asia/Shanghai ;; 3) TIMEZONE=Etc/UTC ;;
         4)
             while :; do
-                wizard_read '时区名称（例如 Asia/Tokyo）：'
+                wizard_read '时区名称（例如 Asia/Tokyo）'
                 if [[ -n $ANSWER && $ANSWER != /* && $ANSWER != *..* && -f /usr/share/zoneinfo/$ANSWER ]]; then
                     TIMEZONE=$ANSWER; break
                 fi
@@ -89,13 +90,13 @@ wizard_ssh() {
     local client=${SSH_CONNECTION%% *}
     printf '\nSSH：回车保留现有端口，输入新端口则额外添加并保留旧端口。\n'
     while :; do
-        wizard_read '新端口 [不新增]：'
+        wizard_read '新增 SSH 端口' '' '不新增，保留现有端口'
         if [[ -z $ANSWER ]]; then SSH_PORT=''; break; fi
         if (number_between "$ANSWER" 1 65535) 2>/dev/null; then SSH_PORT=$((10#$ANSWER)); break; fi
         printf '端口必须为 1–65535。\n'
     done
     printf 'SSH 来源：1) 所有地址  2) 仅当前管理 IP  3) 指定 IP/网段\n'
-    wizard_choice '选择 [1]：' 1 '1 2 3'
+    wizard_choice '选择' 1 '1 2 3'
     case "$ANSWER" in
         1) SSH_SOURCES=() ;;
         2)
@@ -104,29 +105,29 @@ wizard_ssh() {
             SSH_SOURCES=("$client") ;;
         3)
             while :; do
-                wizard_addresses '允许的来源（不能为空）：'
+                wizard_addresses '允许的来源 IP/网段'
                 if ((${#VALUES[@]})); then SSH_SOURCES=("${VALUES[@]}"); break; fi
             done ;;
     esac
     printf '\n导入公钥：1) 跳过  2) 服务器上的公钥文件  3) GitHub 账号\n'
-    wizard_choice '选择 [1]：' 1 '1 2 3'
+    wizard_choice '选择' 1 '1 2 3'
     case "$ANSWER" in
         2)
             while :; do
-                wizard_read '公钥文件路径：'
+                wizard_read '公钥文件路径'
                 if [[ -n $ANSWER && -f $ANSWER && -r $ANSWER ]]; then KEY_FILE=$ANSWER; break; fi
                 printf '文件不存在或不可读。\n'
             done ;;
         3)
             while :; do
-                wizard_read 'GitHub 用户名：'
+                wizard_read 'GitHub 用户名'
                 if [[ $ANSWER =~ ^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}$ ]]; then GITHUB_USER=$ANSWER; break; fi
                 printf '用户名格式不正确。\n'
             done ;;
     esac
     if [[ -n $KEY_FILE || -n $GITHUB_USER ]]; then
         while :; do
-            wizard_read "安装到哪个已有用户 [${SUDO_USER:-root}]：" "${SUDO_USER:-root}"
+            wizard_read '安装到哪个已有用户' "${SUDO_USER:-root}"
             if [[ $ANSWER =~ ^[a-z_][a-z0-9_-]*[$]?$ ]] && getent passwd "$ANSWER" >/dev/null; then
                 KEY_USER=$ANSWER; break
             fi
@@ -146,18 +147,18 @@ wizard_ssh() {
 
 wizard_firewall() {
     printf '\n业务端口：1) 只新增 SSH 放行  2) 网站 HTTP/HTTPS  3) 自定义\n'
-    wizard_choice '选择 [1]：' 1 '1 2 3'
+    wizard_choice '选择' 1 '1 2 3'
     local port proto source
     case "$ANSWER" in
         2) ALLOW_RULES+=(80/tcp 443/tcp) ;;
         3)
             while :; do
-                wizard_number '端口号：' '' 1 65535; port=$ANSWER
+                wizard_number '端口号' '' 1 65535; port=$ANSWER
                 printf '协议：1) TCP  2) UDP\n'
-                wizard_choice '选择 [1]：' 1 '1 2'
+                wizard_choice '选择' 1 '1 2'
                 proto=tcp; [[ $ANSWER == 1 ]] || proto=udp
                 while :; do
-                    wizard_addresses '允许的来源 [回车表示所有地址]：'
+                    wizard_addresses '允许的来源 IP/网段' '所有地址'
                     if ((${#VALUES[@]} <= 1)); then break; fi
                     printf '每条规则只能填写一个来源，可继续添加规则。\n'
                 done
@@ -166,7 +167,7 @@ wizard_firewall() {
                 if ! wizard_yes '继续添加端口'; then break; fi
             done ;;
     esac
-    wizard_addresses 'Fail2ban 信任 IP/网段 [回车不添加]：'
+    wizard_addresses 'Fail2ban 信任 IP/网段' '不添加额外白名单'
     TRUSTED_IPS=(${VALUES[@]+"${VALUES[@]}"})
 }
 
@@ -183,7 +184,7 @@ wizard_swap_size() {
     else
         printf '物理内存不在 8–64 GiB 范围内或无法读取，磁盘 Swap 默认 2048 MiB，可手动修改。\n'
     fi
-    wizard_number "磁盘 Swap 大小 MiB [$suggested]：" "$suggested" 256 65536
+    wizard_number '磁盘 Swap 大小（MiB）' "$suggested" 256 65536
     SWAP_MIB=$ANSWER
 }
 
@@ -203,33 +204,33 @@ EOF
     if ! wizard_yes '是否进入高级设置'; then return 0; fi
     if wizard_yes '启用 BBR 拥塞控制'; then BBR=1; fi
     printf '交换空间：\n1) 保持现状\n2) 新建磁盘 Swap\n3) 配置 ZRAM（重启后生效）\n4) ZRAM + 磁盘 Swap（ZRAM 优先，磁盘提供额外容量）\n'
-    wizard_choice '选择 [1]：' 1 '1 2 3 4'
+    wizard_choice '选择' 1 '1 2 3 4'
     case "$ANSWER" in
         2) wizard_swap_size ;;
-        3) wizard_number 'ZRAM 逻辑容量占物理内存百分比 [50]：' 50 1 100; ZRAM_PERCENT=$ANSWER ;;
+        3) wizard_number 'ZRAM 逻辑容量占物理内存百分比（%）' 50 1 100; ZRAM_PERCENT=$ANSWER ;;
         4)
-            wizard_number 'ZRAM 逻辑容量占物理内存百分比 [50]：' 50 1 100; ZRAM_PERCENT=$ANSWER
+            wizard_number 'ZRAM 逻辑容量占物理内存百分比（%）' 50 1 100; ZRAM_PERCENT=$ANSWER
             wizard_swap_size
             printf 'ZRAM 优先级为 100，脚本管理的磁盘 Swap 为 10；ZRAM 在手动重启后生效。\n' ;;
     esac
     if wizard_yes '调整文件描述符上限'; then
-        wizard_number '上限 [65535]：' 65535 1024 1048576; NOFILE=$ANSWER
+        wizard_number '文件描述符上限' 65535 1024 1048576; NOFILE=$ANSWER
     fi
     while :; do
-        wizard_read '新主机名 [回车保持]：'
+        wizard_read '新主机名' '' '保留现有主机名'
         if [[ -z $ANSWER || ( ${#ANSWER} -le 63 && $ANSWER =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$ ) ]]; then
             HOSTNAME_VALUE=$ANSWER; break
         fi
         printf '请输入不带域名的短主机名，仅包含字母、数字和中划线。\n'
     done
     while :; do
-        wizard_addresses 'DNS 地址 [回车保持；仅支持已有 systemd-resolved]：'
+        wizard_addresses 'DNS 地址（仅支持已有 systemd-resolved）' '保留现有 DNS 配置'
         DNS=$(IFS=,; printf '%s' "${VALUES[*]:-}")
         [[ $DNS == */* ]] || break
         printf 'DNS 只能填写 IP 地址，不能填写网段。\n'
     done
     if wizard_yes '清理 APT 判定不再需要的依赖（autoremove）'; then AUTOREMOVE=1; fi
-    wizard_number '新连接确认窗口，分钟 [10]：' 10 2 60
+    wizard_number '新连接确认窗口（分钟）' 10 2 60
     ROLLBACK_SECONDS=$((ANSWER * 60))
 }
 
@@ -275,7 +276,7 @@ wizard_pending() {
     [[ $RUN_ID =~ ^[0-9]{8}T[0-9]{6}Z-[0-9]+$ ]] || die '待确认运行记录无效。'
     printf '\n检测到尚未确认的初始化：%s\n' "$RUN_ID"
     printf '1) 确认：我已从新 SSH 连接登录\n2) 立即回滚访问配置\n3) 查看状态\n0) 退出，保留定时回滚\n'
-    wizard_choice '选择 [0]：' 0 '0 1 2 3'
+    wizard_choice '选择' 0 '0 1 2 3'
     case "$ANSWER" in
         1) COMMAND=confirm ;;
         2)
@@ -289,10 +290,10 @@ wizard_pending() {
 wizard() {
     [[ -t 0 && -t 1 ]] || die '交互向导需要终端。请直接在 SSH 终端运行；仅预览请使用 plan，自动化请显式使用 apply。'
     INTERACTIVE=1
-    printf '\nDebian 13 服务器初始化向导\n回车使用默认值，Ctrl+C 随时退出。\n'
+    printf '\nDebian 13 服务器初始化向导\n每项均显示默认值，回车采用；标注“无，必填”的项目需输入。Ctrl+C 随时退出。\n'
     if [[ -r $STATE_DIR/pending ]]; then wizard_pending; return 0; fi
     printf '\n1) 配置并初始化\n2) 仅预览配置（不修改系统）\n3) 查看当前状态\n0) 退出\n'
-    wizard_choice '选择 [1]：' 1 '0 1 2 3'
+    wizard_choice '选择' 1 '0 1 2 3'
     local mode=$ANSWER
     case "$mode" in
         0) COMMAND=cancelled; return 0 ;; 3) COMMAND=status; return 0 ;;
